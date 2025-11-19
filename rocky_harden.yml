@@ -943,14 +943,14 @@
         group: root
         mode: '0600'
 
-    - name: "CIS 5.2.2 - Ensure SSH access is limited"
-      tags: cis_5.2.2
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^AllowUsers'
-        line: 'AllowUsers root'
-        state: present
-      notify: restart ssh
+#    - name: "CIS 5.2.2 - Ensure SSH access is limited"
+#      tags: cis_5.2.2
+#      lineinfile:
+#        path: /etc/ssh/sshd_config
+#        regexp: '^AllowUsers'
+#        line: 'AllowUsers root'
+#        state: present
+##      notify: restart ssh
 
     - name: "CIS 5.2.3 - Ensure SSH LogLevel is appropriate"
       tags: cis_5.2.3
@@ -959,7 +959,7 @@
         regexp: '^LogLevel'
         line: 'LogLevel INFO'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "CIS 5.2.4 - Ensure SSH X11 forwarding is disabled"
       tags: cis_5.2.4
@@ -968,7 +968,7 @@
         regexp: '^X11Forwarding'
         line: 'X11Forwarding no'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "CIS 5.2.5 - Ensure SSH MaxAuthTries is set to 4 or less"
       tags: cis_5.2.5
@@ -977,7 +977,7 @@
         regexp: '^MaxAuthTries'
         line: 'MaxAuthTries 4'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "CIS 5.2.6 - Ensure SSH IgnoreRhosts is enabled"
       tags: cis_5.2.6
@@ -986,7 +986,7 @@
         regexp: '^IgnoreRhosts'
         line: 'IgnoreRhosts yes'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "CIS 5.2.7 - Ensure SSH HostbasedAuthentication is disabled"
       tags: cis_5.2.7
@@ -995,7 +995,7 @@
         regexp: '^HostbasedAuthentication'
         line: 'HostbasedAuthentication no'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "CIS 5.2.8 - Configure SSH root login safely"
       tags: cis_5.2.8
@@ -1004,7 +1004,7 @@
         regexp: '^PermitRootLogin'
         line: 'PermitRootLogin prohibit-password'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "Ensure PAM allows root login"
       tags: pam_fix
@@ -1019,7 +1019,7 @@
         path: /etc/ssh/sshd_config
         line: 'PubkeyAcceptedAlgorithms +ssh-rsa'
         state: present
-      notify: restart ssh
+##      notify: restart ssh
 
     - name: "Backup critical files before changes"
       tags: backup
@@ -1038,7 +1038,7 @@
         regexp: '^PermitEmptyPasswords'
         line: 'PermitEmptyPasswords no'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.10 - Ensure SSH PermitUserEnvironment is disabled"
       tags: cis_5.2.10
@@ -1047,7 +1047,7 @@
         regexp: '^PermitUserEnvironment'
         line: 'PermitUserEnvironment no'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.11 - Ensure only approved MAC algorithms are used"
       tags: cis_5.2.11
@@ -1056,7 +1056,7 @@
         regexp: '^MACs'
         line: 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.12 - Ensure SSH Idle Timeout Interval is configured"
       tags: cis_5.2.12
@@ -1067,7 +1067,7 @@
             regexp: '^ClientAliveInterval'
             line: 'ClientAliveInterval 300'
             state: present
-          notify: restart ssh
+    #      notify: restart ssh
 
         - name: Set ClientAliveCountMax
           lineinfile:
@@ -1075,7 +1075,7 @@
             regexp: '^ClientAliveCountMax'
             line: 'ClientAliveCountMax 0'
             state: present
-          notify: restart ssh
+    #      notify: restart ssh
 
     - name: "CIS 5.2.13 - Ensure SSH LoginGraceTime is set to one minute or less"
       tags: cis_5.2.13
@@ -1084,7 +1084,7 @@
         regexp: '^LoginGraceTime'
         line: 'LoginGraceTime 60'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.14 - Ensure SSH warning banner is configured"
       tags: cis_5.2.14
@@ -1093,7 +1093,7 @@
         regexp: '^Banner'
         line: 'Banner /etc/issue.net'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.15 - Ensure SSH PAM is enabled"
       tags: cis_5.2.15
@@ -1102,7 +1102,7 @@
         regexp: '^UsePAM'
         line: 'UsePAM yes'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.16 - Ensure SSH AllowTcpForwarding is disabled"
       tags: cis_5.2.16
@@ -1111,7 +1111,7 @@
         regexp: '^AllowTcpForwarding'
         line: 'AllowTcpForwarding no'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.17 - Ensure SSH MaxStartups is configured"
       tags: cis_5.2.17
@@ -1120,7 +1120,7 @@
         regexp: '^MaxStartups'
         line: 'MaxStartups 10:30:60'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
     - name: "CIS 5.2.18 - Ensure SSH MaxSessions is limited"
       tags: cis_5.2.18
@@ -1129,7 +1129,7 @@
         regexp: '^MaxSessions'
         line: 'MaxSessions 10'
         state: present
-      notify: restart ssh
+#      notify: restart ssh
 
   # =========================
   # CIS 5.3 - Configure PAM
