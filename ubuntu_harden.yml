@@ -398,6 +398,7 @@
         state: present
       when: "'desktop' in group_names"
 
+
   # =========================
   # CIS 2.1 - inetd Services
   # =========================
@@ -911,14 +912,14 @@
         group: root
         mode: '0600'
 
-    - name: "CIS 5.2.2 - Ensure SSH access is limited"
-      tags: cis_5.2.2
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^AllowUsers'
-        line: 'AllowUsers root'
-        state: present
-      notify: restart ssh
+#    - name: "CIS 5.2.2 - Ensure SSH access is limited"
+#      tags: cis_5.2.2
+#      lineinfile:
+#        path: /etc/ssh/sshd_config
+#        regexp: '^AllowUsers'
+#        line: 'AllowUsers root'
+#        state: present
+#      notify: restart ssh
 
     - name: "CIS 5.2.3 - Ensure SSH LogLevel is appropriate"
       tags: cis_5.2.3
@@ -1209,6 +1210,7 @@
         regexp: '^console$'
         line: 'console'
         state: present
+      ignore_errors: yes
 
   # =========================
   # CIS 6.1 - System File Permissions
@@ -1651,3 +1653,122 @@
           with_items: "{{ rhosts_files.stdout_lines }}"
           when: rhosts_files.stdout != ""
           ignore_errors: yes
+    # =========================
+    # Filesystem Mount Options Hardening - FIXED VERSION
+    # =========================
+    - name: Harden filesystem mount options
+      tags: fstab_hardening
+      block:
+        - name: Backup fstab file
+          copy:
+            src: /etc/fstab
+            dest: "/etc/fstab.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
+            remote_src: yes
+          ignore_errors: yes
+    
+        - name: Check current fstab entries
+          command: cat /etc/fstab
+          register: fstab_current
+          changed_when: false
+          ignore_errors: yes
+    
+        - name: Display current fstab
+          debug:
+            var: fstab_current.stdout
+    
+        # استفاده از regex عمومی‌تر برای تمام device types
+        - name: Harden /home partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/home\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,nodev,nosuid\2'
+            backup: yes
+          when: "'/home' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /tmp partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/tmp\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/tmp' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,nodev,nosuid\2'
+            backup: yes
+          when: "'/var' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/log/audit partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/log/audit\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/log/audit' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/log partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/log\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/log' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/tmp partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/tmp\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/tmp' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Verify fstab changes were applied
+          command: grep -E '^\S+\s+/(home|tmp|var|var/log/audit|var/log|var/tmp)\s+' /etc/fstab
+          register: fstab_verify
+          changed_when: false
+          ignore_errors: yes
+    
+        - name: Display fstab after changes
+          debug:
+            var: fstab_verify.stdout
+    
+        - name: Remount partitions with new options
+          mount:
+            path: "{{ item }}"
+            src: "{{ item | mount_info | default(omit) }}"
+            fstype: "{{ item | mount_info('fstype') | default(omit) }}"
+            opts: "{{ item | mount_info('opts') | default(omit) }}"
+            state: remounted
+          loop:
+            - /home
+            - /tmp
+            - /var
+            - /var/log
+            - /var/log/audit
+            - /var/tmp
+          ignore_errors: yes
+    
+        - name: Display current mount options after remount
+          shell: |
+            for mp in /home /tmp /var /var/log/audit /var/log /var/tmp; do
+              if mountpoint -q "$mp"; then
+                echo "$mp: $(findmnt -n -o OPTIONS "$mp")"
+              fi
+            done
+          args:
+            warn: false
+          register: mount_final
+          ignore_errors: yes
+    
+        - name: Display final mount options
+          debug:
+            var: mount_final.stdout
