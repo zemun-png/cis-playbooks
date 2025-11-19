@@ -1,1 +1,1530 @@
-test
+- hosts: 10.10.10.100
+  remote_user: root
+  become: true
+  become_method: sudo
+  gather_facts: yes
+
+  vars:
+    privileged_bins:
+      - /usr/bin/write
+      - /usr/bin/ksu
+      - /usr/lib/utempter/utempter
+      - /usr/lib/openssh/ssh-keysign
+      - /usr/lib/policykit-1/polkit-agent-helper-1
+      - /usr/bin/pkexec
+
+  handlers:
+    - name: restart ssh
+      service:
+        name: sshd
+        state: restarted
+
+  tasks:
+
+  # =========================
+  # CIS 1.1 - Filesystem Configuration
+  # =========================
+    - name: "CIS 1.1.1.1 - Ensure mounting of cramfs filesystems is disabled"
+      tags: cis_1.1.1.1
+      block:
+        - name: Disable cramfs module
+          lineinfile:
+            path: /etc/modprobe.d/cramfs.conf
+            line: "install cramfs /bin/true"
+            create: yes
+            state: present
+
+        - name: Unload cramfs module if loaded
+          command: rmmod cramfs
+          ignore_errors: yes
+          when: ansible_facts.modules.cramfs is defined
+
+    - name: "CIS 1.1.1.2 - Ensure mounting of freevxfs filesystems is disabled"
+      tags: cis_1.1.1.2
+      block:
+        - name: Disable freevxfs module
+          lineinfile:
+            path: /etc/modprobe.d/freevxfs.conf
+            line: "install freevxfs /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.1.3 - Ensure mounting of jffs2 filesystems is disabled"
+      tags: cis_1.1.1.3
+      block:
+        - name: Disable jffs2 module
+          lineinfile:
+            path: /etc/modprobe.d/jffs2.conf
+            line: "install jffs2 /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.1.4 - Ensure mounting of hfs filesystems is disabled"
+      tags: cis_1.1.1.4
+      block:
+        - name: Disable hfs module
+          lineinfile:
+            path: /etc/modprobe.d/hfs.conf
+            line: "install hfs /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.1.5 - Ensure mounting of hfsplus filesystems is disabled"
+      tags: cis_1.1.1.5
+      block:
+        - name: Disable hfsplus module
+          lineinfile:
+            path: /etc/modprobe.d/hfsplus.conf
+            line: "install hfsplus /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.1.6 - Ensure mounting of squashfs filesystems is disabled"
+      tags: cis_1.1.1.6
+      block:
+        - name: Disable squashfs module
+          lineinfile:
+            path: /etc/modprobe.d/squashfs.conf
+            line: "install squashfs /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.1.7 - Ensure mounting of udf filesystems is disabled"
+      tags: cis_1.1.1.7
+      block:
+        - name: Disable udf module
+          lineinfile:
+            path: /etc/modprobe.d/udf.conf
+            line: "install udf /bin/true"
+            create: yes
+            state: present
+
+    - name: "CIS 1.1.2 - Ensure /tmp is configured"
+      tags: cis_1.1.2
+      block:
+        - name: Check if /tmp is separate partition
+          command: findmnt -n /tmp
+          register: tmp_mount
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Configure /tmp in fstab if not separate partition
+          lineinfile:
+            path: /etc/fstab
+            line: "tmpfs /tmp tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0"
+            state: present
+          when: tmp_mount.rc != 0
+
+        - name: Mount /tmp with correct options
+          mount:
+            path: /tmp
+            src: tmpfs
+            fstype: tmpfs
+            opts: defaults,rw,nosuid,nodev,noexec,relatime
+            state: mounted
+          when: tmp_mount.rc != 0
+
+    - name: "CIS 1.1.3 - Ensure nodev option set on /tmp partition"
+      tags: cis_1.1.3
+      command: mount -o remount,nodev /tmp
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/tmp') | list | length > 0) and
+        ('nodev' not in ansible_mounts | selectattr('mount', 'equalto', '/tmp') | map(attribute='options') | first)
+
+    - name: "CIS 1.1.4 - Ensure nosuid option set on /tmp partition"
+      tags: cis_1.1.4
+      command: mount -o remount,nosuid /tmp
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/tmp') | list | length > 0) and
+        ('nosuid' not in ansible_mounts | selectattr('mount', 'equalto', '/tmp') | map(attribute='options') | first)
+
+    - name: "CIS 1.1.5 - Ensure noexec option set on /tmp partition"
+      tags: cis_1.1.5
+      command: mount -o remount,noexec /tmp
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/tmp') | list | length > 0) and
+        ('noexec' not in ansible_mounts | selectattr('mount', 'equalto', '/tmp') | map(attribute='options') | first)
+
+    - name: "CIS 1.1.6 - Ensure /dev/shm is configured"
+      tags: cis_1.1.6
+      block:
+        - name: Check /dev/shm in fstab
+          command: grep -E '\s/dev/shm\s' /etc/fstab
+          register: shm_fstab
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Check if /dev/shm is currently mounted
+          command: findmnt -n /dev/shm
+          register: shm_mount
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Configure /dev/shm in fstab
+          lineinfile:
+            path: /etc/fstab
+            line: "tmpfs /dev/shm tmpfs defaults,noexec,nodev,nosuid,seclabel 0 0"
+            state: present
+          when: shm_fstab.rc != 0
+
+        - name: Mount /dev/shm with correct options
+          mount:
+            path: /dev/shm
+            src: tmpfs
+            fstype: tmpfs
+            opts: defaults,noexec,nodev,nosuid,seclabel
+            state: mounted
+          when: shm_fstab.rc != 0 or shm_mount.rc != 0
+
+    - name: "CIS 1.1.7 - Ensure nodev option set on /dev/shm partition"
+      tags: cis_1.1.7
+      command: mount -o remount,nodev /dev/shm
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | list | length > 0) and
+        ('nodev' not in ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | map(attribute='options') | first)
+
+    - name: "CIS 1.1.8 - Ensure nosuid option set on /dev/shm partition"
+      tags: cis_1.1.8
+      command: mount -o remount,nosuid /dev/shm
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | list | length > 0) and
+        ('nosuid' not in ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | map(attribute='options') | first)
+
+    - name: "CIS 1.1.9 - Ensure noexec option set on /dev/shm partition"
+      tags: cis_1.1.9
+      command: mount -o remount,noexec /dev/shm
+      when: >
+        (ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | list | length > 0) and
+        ('noexec' not in ansible_mounts | selectattr('mount', 'equalto', '/dev/shm') | map(attribute='options') | first)
+
+  # =========================
+  # CIS 1.2 - Configure Software Updates
+  # =========================
+    - name: "CIS 1.2.1 - Ensure GPG keys are configured"
+      tags: cis_1.2.1
+      command: rpm -q gpg-pubkey --qf '%{name}-%{version}-%{release} --> %{summary}\n'
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 1.2.2 - Ensure package manager repositories are configured"
+      tags: cis_1.2.2
+      command: yum repolist
+      changed_when: false
+      ignore_errors: yes
+
+  # =========================
+  # CIS 1.3 - Filesystem Integrity Checking
+  # =========================
+    - name: "CIS 1.3.1 - Ensure AIDE is installed"
+      tags: cis_1.3.1
+      package:
+        name: aide
+        state: present
+
+    - name: "CIS 1.3.2 - Ensure filesystem integrity is regularly checked"
+      tags: cis_1.3.2
+      cron:
+        name: "AIDE check"
+        minute: "0"
+        hour: "5"
+        job: "/usr/sbin/aide --check"
+
+  # =========================
+  # CIS 1.4 - Secure Boot Settings
+  # =========================
+    - name: "CIS 1.4.1 - Ensure permissions on bootloader config are configured"
+      tags: cis_1.4.1
+      file:
+        path: /boot/grub2/grub.cfg
+        owner: root
+        group: root
+        mode: '0600'
+
+#    - name: "CIS 1.4.2 - Ensure authentication required for single user mode"
+#      tags: cis_1.4.2
+#      lineinfile:
+#        path: /etc/shadow
+#        regexp: '^root:'
+#        line: 'root:!*:'
+
+  # =========================
+  # CIS 1.5 - Additional Process Hardening
+  # =========================
+    - name: "CIS 1.5.1 - Ensure core dumps are restricted"
+      tags: cis_1.5.1
+      block:
+        - name: Configure core dump limits
+          lineinfile:
+            path: /etc/security/limits.conf
+            regexp: '^\\* hard core'
+            line: '* hard core 0'
+            state: present
+
+        - name: Configure sysctl for core dumps
+          sysctl:
+            name: fs.suid_dumpable
+            value: '0'
+            state: present
+            reload: yes
+
+    - name: "CIS 1.5.2 - Ensure XD/NX support is enabled"
+      tags: cis_1.5.2
+      block:
+        - name: Check if XD/NX support is enabled
+          shell: |
+            dmesg | grep -o "NX (Execute Disable).*protection: active"
+          register: nx_support
+          changed_when: false
+          ignore_errors: yes
+
+    - name: "CIS 1.5.3 - Ensure address space layout randomization (ASLR) is enabled"
+      tags: cis_1.5.3
+      sysctl:
+        name: kernel.randomize_va_space
+        value: '2'
+        state: present
+        reload: yes
+
+    - name: "CIS 1.5.4 - Ensure prelink is disabled"
+      tags: cis_1.5.4
+      package:
+        name: prelink
+        state: absent
+
+  # =========================
+  # CIS 1.6 - Mandatory Access Control
+  # =========================
+    - name: "CIS 1.6.1.1 - Ensure SELinux is installed"
+      tags: cis_1.6.1.1
+      package:
+        name: libselinux
+        state: present
+
+    - name: "CIS 1.6.1.2 - Ensure SELinux is not disabled in bootloader configuration"
+      tags: cis_1.6.1.2
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: 'GRUB_CMDLINE_LINUX="selinux=1 enforcing=1"'
+        backup: yes
+
+    - name: "CIS 1.6.1.3 - Ensure SELinux policy is configured"
+      tags: cis_1.6.1.3
+      selinux:
+        policy: targeted
+        state: enforcing
+
+    - name: "CIS 1.6.1.4 - Ensure SETroubleshoot is not installed"
+      tags: cis_1.6.1.4
+      package:
+        name: setroubleshoot
+        state: absent
+
+    - name: "CIS 1.6.1.5 - Ensure the MCS Translation Service (mcstrans) is not installed"
+      tags: cis_1.6.1.5
+      package:
+        name: mcstrans
+        state: absent
+
+  # =========================
+  # CIS 1.7 - Command Line Warning Banners
+  # =========================
+    - name: "CIS 1.7.1 - Ensure message of the day is configured properly"
+      tags: cis_1.7.1
+      block:
+        - name: Configure MOTD
+          copy:
+            dest: /etc/motd
+            content: |
+              Authorized uses only. All activity may be monitored and reported.
+            owner: root
+            group: root
+            mode: '0644'
+
+    - name: "CIS 1.7.2 - Ensure local login warning banner is configured properly"
+      tags: cis_1.7.2
+      block:
+        - name: Configure issue banner
+          copy:
+            dest: /etc/issue
+            content: |
+              Authorized uses only. All activity may be monitored and reported.
+            owner: root
+            group: root
+            mode: '0644'
+
+    - name: "CIS 1.7.3 - Ensure remote login warning banner is configured properly"
+      tags: cis_1.7.3
+      block:
+        - name: Configure issue.net banner
+          copy:
+            dest: /etc/issue.net
+            content: |
+              Authorized uses only. All activity may be monitored and reported.
+            owner: root
+            group: root
+            mode: '0644'
+
+    - name: "CIS 1.7.4 - Ensure permissions on /etc/motd are configured"
+      tags: cis_1.7.4
+      file:
+        path: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 1.7.5 - Ensure permissions on /etc/issue are configured"
+      tags: cis_1.7.5
+      file:
+        path: /etc/issue
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 1.7.6 - Ensure permissions on /etc/issue.net are configured"
+      tags: cis_1.7.6
+      file:
+        path: /etc/issue.net
+        owner: root
+        group: root
+        mode: '0644'
+
+  # =========================
+  # CIS 1.8 - GNOME Display Manager
+  # =========================
+    - name: "CIS 1.8.1 - Ensure GNOME Display Manager is removed"
+      tags: cis_1.8.1
+      package:
+        name: gdm
+        state: absent
+      when: "'desktop' in group_names"
+
+  # =========================
+  # CIS 2.1 - inetd Services
+  # =========================
+    - name: "CIS 2.1.1 - Ensure xinetd is not installed"
+      tags: cis_2.1.1
+      package:
+        name: xinetd
+        state: absent
+
+  # =========================
+  # CIS 2.2 - Time Synchronization
+  # =========================
+    - name: "CIS 2.2.1.1 - Ensure time synchronization is in use"
+      tags: cis_2.2.1.1
+      package:
+        name: chrony
+        state: present
+
+    - name: "CIS 2.2.1.2 - Ensure chrony is configured"
+      tags: cis_2.2.1.2
+      block:
+        - name: Configure chrony
+          copy:
+            dest: /etc/chrony.conf
+            content: |
+              pool 2.rocky.pool.ntp.org iburst
+              pool 1.rocky.pool.ntp.org iburst
+              pool 0.rocky.pool.ntp.org iburst
+              keyfile /etc/chrony.keys
+              driftfile /var/lib/chrony/drift
+              logdir /var/log/chrony
+              maxupdateskew 100.0
+              rtcsync
+              makestep 1.0 3
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Enable chrony service
+          systemd:
+            name: chronyd
+            enabled: yes
+            state: started
+
+  # =========================
+  # CIS 2.3 - Special Purpose Services
+  # =========================
+    - name: "CIS 2.3.1 - Ensure NIS Client is not installed"
+      tags: cis_2.3.1
+      package:
+        name: ypbind
+        state: absent
+
+    - name: "CIS 2.3.2 - Ensure rsh client is not installed"
+      tags: cis_2.3.2
+      package:
+        name: rsh
+        state: absent
+
+    - name: "CIS 2.3.3 - Ensure talk client is not installed"
+      tags: cis_2.3.3
+      package:
+        name: talk
+        state: absent
+
+    - name: "CIS 2.3.4 - Ensure telnet client is not installed"
+      tags: cis_2.3.4
+      package:
+        name: telnet
+        state: absent
+
+    - name: "CIS 2.3.5 - Ensure LDAP client is not installed"
+      tags: cis_2.3.5
+      package:
+        name: openldap-clients
+        state: absent
+
+  # =========================
+  # CIS 3.1 - Network Parameters (Host Only)
+  # =========================
+    - name: "CIS 3.1.1 - Ensure IP forwarding is disabled"
+      tags: cis_3.1.1
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '0'
+        state: present
+        reload: yes
+
+    - name: "CIS 3.1.2 - Ensure packet redirect sending is disabled"
+      tags: cis_3.1.2
+      block:
+        - name: Disable packet redirect sending
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.send_redirects
+            - net.ipv4.conf.default.send_redirects
+
+  # =========================
+  # CIS 3.2 - Network Parameters (Host and Router)
+  # =========================
+    - name: "CIS 3.2.1 - Ensure source routed packets are not accepted"
+      tags: cis_3.2.1
+      block:
+        - name: Disable source routed packets
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.accept_source_route
+            - net.ipv4.conf.default.accept_source_route
+
+    - name: "CIS 3.2.2 - Ensure ICMP redirects are not accepted"
+      tags: cis_3.2.2
+      block:
+        - name: Disable ICMP redirects
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.accept_redirects
+            - net.ipv4.conf.default.accept_redirects
+
+    - name: "CIS 3.2.3 - Ensure secure ICMP redirects are not accepted"
+      tags: cis_3.2.3
+      block:
+        - name: Disable secure ICMP redirects
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.secure_redirects
+            - net.ipv4.conf.default.secure_redirects
+
+    - name: "CIS 3.2.4 - Ensure suspicious packets are logged"
+      tags: cis_3.2.4
+      block:
+        - name: Enable suspicious packets logging
+          sysctl:
+            name: "{{ item }}"
+            value: '1'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.log_martians
+            - net.ipv4.conf.default.log_martians
+
+    - name: "CIS 3.2.5 - Ensure broadcast ICMP requests are ignored"
+      tags: cis_3.2.5
+      sysctl:
+        name: net.ipv4.icmp_echo_ignore_broadcasts
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: "CIS 3.2.6 - Ensure bogus ICMP responses are ignored"
+      tags: cis_3.2.6
+      sysctl:
+        name: net.ipv4.icmp_ignore_bogus_error_responses
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: "CIS 3.2.7 - Ensure Reverse Path Filtering is enabled"
+      tags: cis_3.2.7
+      block:
+        - name: Enable Reverse Path Filtering
+          sysctl:
+            name: "{{ item }}"
+            value: '1'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv4.conf.all.rp_filter
+            - net.ipv4.conf.default.rp_filter
+
+    - name: "CIS 3.2.8 - Ensure TCP SYN Cookies is enabled"
+      tags: cis_3.2.8
+      sysctl:
+        name: net.ipv4.tcp_syncookies
+        value: '1'
+        state: present
+        reload: yes
+
+  # =========================
+  # CIS 3.3 - IPv6
+  # =========================
+    - name: "CIS 3.3.1 - Ensure IPv6 router advertisements are not accepted"
+      tags: cis_3.3.1
+      block:
+        - name: Disable IPv6 router advertisements
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv6.conf.all.accept_ra
+            - net.ipv6.conf.default.accept_ra
+
+    - name: "CIS 3.3.2 - Ensure IPv6 redirects are not accepted"
+      tags: cis_3.3.2
+      block:
+        - name: Disable IPv6 redirects
+          sysctl:
+            name: "{{ item }}"
+            value: '0'
+            state: present
+            reload: yes
+          loop:
+            - net.ipv6.conf.all.accept_redirects
+            - net.ipv6.conf.default.accept_redirects
+
+  # =========================
+  # CIS 3.4 - TCP Wrappers
+  # =========================
+    - name: "CIS 3.4.1 - Ensure TCP Wrappers is installed"
+      tags: cis_3.4.1
+      block:
+        - name: Install TCP Wrappers for RHEL 8+
+          package:
+            name: tcp_wrappers-libs
+            state: present
+          when: 
+            - ansible_facts.os_family == "RedHat"
+            - ansible_facts.distribution_major_version | int >= 8
+
+        - name: Install TCP Wrappers for older RHEL
+          package:
+            name: tcp_wrappers
+            state: present
+          when: 
+            - ansible_facts.os_family == "RedHat" 
+            - ansible_facts.distribution_major_version | int < 8
+
+        - name: Install TCP Wrappers for Debian
+          package:
+            name: tcpd
+            state: present
+          when: ansible_facts.os_family == "Debian"
+
+    - name: "CIS 3.4.2 - Ensure /etc/hosts.allow is configured"
+      tags: cis_3.4.2
+      copy:
+        dest: /etc/hosts.allow
+        content: |
+          # Allow connections from localhost
+          ALL: 127.0.0.1 [::1]
+          # Allow SSH from specific network (adjust as needed)
+          sshd: 10.0.0.0/255.0.0.0
+          # Allow necessary services
+          ALL: LOCAL
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 3.4.3 - Ensure /etc/hosts.deny is configured"
+      tags: cis_3.4.3
+      copy:
+        dest: /etc/hosts.deny
+        content: |
+          # Deny all other connections
+          ALL: ALL
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 3.4.4 - Ensure permissions on /etc/hosts.allow are configured"
+      tags: cis_3.4.4
+      file:
+        path: /etc/hosts.allow
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 3.4.5 - Ensure permissions on /etc/hosts.deny are configured"
+      tags: cis_3.4.5
+      file:
+        path: /etc/hosts.deny
+        owner: root
+        group: root
+        mode: '0644'
+
+  # =========================
+  # CIS 3.5 - Uncommon Network Protocols
+  # =========================
+    - name: "CIS 3.5.1 - Ensure DCCP is disabled"
+      tags: cis_3.5.1
+      modprobe:
+        name: dccp
+        state: absent
+
+    - name: "CIS 3.5.2 - Ensure SCTP is disabled"
+      tags: cis_3.5.2
+      modprobe:
+        name: sctp
+        state: absent
+
+    - name: "CIS 3.5.3 - Ensure RDS is disabled"
+      tags: cis_3.5.3
+      modprobe:
+        name: rds
+        state: absent
+
+    - name: "CIS 3.5.4 - Ensure TIPC is disabled"
+      tags: cis_3.5.4
+      modprobe:
+        name: tipc
+        state: absent
+
+  # =========================
+  # CIS 3.6 - Firewall Configuration
+  # =========================
+    - name: "CIS 3.6.1 - Ensure iptables is installed"
+      tags: cis_3.6.1
+      package:
+        name: iptables
+        state: present
+
+    - name: "CIS 3.6.2 - Ensure firewalld is installed"
+      tags: cis_3.6.2
+      package:
+        name: firewalld
+        state: present
+
+    - name: "CIS 3.6.3 - Ensure firewalld service is enabled and running"
+      tags: cis_3.6.3
+      systemd:
+        name: firewalld
+        enabled: yes
+        state: started
+
+    - name: "CIS 3.6.4 - Ensure default zone is set"
+      tags: cis_3.6.4
+      command: firewall-cmd --set-default-zone=public
+      ignore_errors: yes
+
+    - name: "CIS 3.6.5 - Ensure loopback traffic is configured"
+      tags: cis_3.6.5
+      block:
+        - name: Allow loopback traffic
+          command: firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="127.0.0.1" destination address="127.0.0.1" accept'
+          ignore_errors: yes
+
+        - name: Deny other loopback traffic
+          command: firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="127.0.0.1" destination not address="127.0.0.1" drop'
+          ignore_errors: yes
+
+    - name: "CIS 3.6.6 - Ensure firewall rules exist for all open ports"
+      tags: cis_3.6.6
+      command: firewall-cmd --permanent --add-service=ssh
+      ignore_errors: yes
+
+    - name: "CIS 3.6.7 - Ensure default deny firewall policy"
+      tags: cis_3.6.7
+      command: firewall-cmd --permanent --set-target=DROP
+      ignore_errors: yes
+
+    - name: "CIS 3.6.8 - Reload firewalld"
+      tags: cis_3.6.8
+      command: firewall-cmd --reload
+      ignore_errors: yes
+
+  # =========================
+  # CIS 4.1 - Configure System Accounting (auditd)
+  # =========================
+    - name: "CIS 4.1.1.1 - Ensure auditd is installed"
+      tags: cis_4.1.1.1
+      package:
+        name: audit
+        state: present
+
+    - name: "CIS 4.1.1.2 - Ensure auditd service is enabled"
+      tags: cis_4.1.1.2
+      systemd:
+        name: auditd
+        enabled: yes
+        state: started
+
+    - name: "CIS 4.1.1.3 - Ensure auditing for processes that start prior to auditd is enabled"
+      tags: cis_4.1.1.3
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: 'GRUB_CMDLINE_LINUX="audit=1"'
+        backup: yes
+
+  # =========================
+  # CIS 4.2 - Configure Logging
+  # =========================
+    - name: "CIS 4.2.1 - Configure rsyslog"
+      tags: cis_4.2.1
+      block:
+        - name: Ensure rsyslog is installed
+          package:
+            name: rsyslog
+            state: present
+
+        - name: Ensure rsyslog service is enabled
+          systemd:
+            name: rsyslog
+            enabled: yes
+            state: started
+
+        - name: Ensure rsyslog default file permissions configured
+          lineinfile:
+            path: /etc/rsyslog.conf
+            regexp: '^\\$FileCreateMode'
+            line: '$FileCreateMode 0640'
+            state: present
+
+    - name: "CIS 4.2.2 - Ensure journald is configured"
+      tags: cis_4.2.2
+      block:
+        - name: Configure journald
+          lineinfile:
+            path: /etc/systemd/journald.conf
+            regexp: '^{{ item.key }}'
+            line: '{{ item.key }}={{ item.value }}'
+            state: present
+          loop:
+            - { key: 'Compress', value: 'yes' }
+            - { key: 'Storage', value: 'persistent' }
+            - { key: 'ForwardToSyslog', value: 'yes' }
+
+        - name: Restart journald
+          systemd:
+            name: systemd-journald
+            state: restarted
+
+    - name: "CIS 4.2.3 - Ensure permissions on all logfiles are configured"
+      tags: cis_4.2.3
+      command: find /var/log -type f -exec chmod g-wx,o-rwx {} +
+      ignore_errors: yes
+
+  # =========================
+  # CIS 5.1 - Configure cron
+  # =========================
+    - name: "CIS 5.1.1 - Ensure cron daemon is enabled"
+      tags: cis_5.1.1
+      systemd:
+        name: crond
+        enabled: yes
+        state: started
+
+    - name: "CIS 5.1.2 - Ensure permissions on /etc/crontab are configured"
+      tags: cis_5.1.2
+      file:
+        path: /etc/crontab
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: "CIS 5.1.3 - Ensure permissions on /etc/cron.hourly are configured"
+      tags: cis_5.1.3
+      file:
+        path: /etc/cron.hourly
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "CIS 5.1.4 - Ensure permissions on /etc/cron.daily are configured"
+      tags: cis_5.1.4
+      file:
+        path: /etc/cron.daily
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "CIS 5.1.5 - Ensure permissions on /etc/cron.weekly are configured"
+      tags: cis_5.1.5
+      file:
+        path: /etc/cron.weekly
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "CIS 5.1.6 - Ensure permissions on /etc/cron.monthly are configured"
+      tags: cis_5.1.6
+      file:
+        path: /etc/cron.monthly
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "CIS 5.1.7 - Ensure permissions on /etc/cron.d are configured"
+      tags: cis_5.1.7
+      file:
+        path: /etc/cron.d
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "CIS 5.1.8 - Ensure at/cron is restricted to authorized users"
+      tags: cis_5.1.8
+      block:
+        - name: Ensure /etc/cron.deny doesn't exist
+          file:
+            path: /etc/cron.deny
+            state: absent
+
+        - name: Ensure /etc/at.deny doesn't exist
+          file:
+            path: /etc/at.deny
+            state: absent
+
+        - name: Ensure /etc/cron.allow exists and is configured
+          copy:
+            dest: /etc/cron.allow
+            content: |
+              root
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Ensure /etc/at.allow exists and is configured
+          copy:
+            dest: /etc/at.allow
+            content: |
+              root
+            owner: root
+            group: root
+            mode: '0600'
+
+  # =========================
+  # CIS 5.2 - SSH Server Configuration
+  # =========================
+    - name: "CIS 5.2.1 - Ensure permissions on /etc/ssh/sshd_config are configured"
+      tags: cis_5.2.1
+      file:
+        path: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: "CIS 5.2.2 - Ensure SSH access is limited"
+      tags: cis_5.2.2
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^AllowUsers'
+        line: 'AllowUsers root'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.3 - Ensure SSH LogLevel is appropriate"
+      tags: cis_5.2.3
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^LogLevel'
+        line: 'LogLevel INFO'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.4 - Ensure SSH X11 forwarding is disabled"
+      tags: cis_5.2.4
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^X11Forwarding'
+        line: 'X11Forwarding no'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.5 - Ensure SSH MaxAuthTries is set to 4 or less"
+      tags: cis_5.2.5
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^MaxAuthTries'
+        line: 'MaxAuthTries 4'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.6 - Ensure SSH IgnoreRhosts is enabled"
+      tags: cis_5.2.6
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^IgnoreRhosts'
+        line: 'IgnoreRhosts yes'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.7 - Ensure SSH HostbasedAuthentication is disabled"
+      tags: cis_5.2.7
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^HostbasedAuthentication'
+        line: 'HostbasedAuthentication no'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.8 - Configure SSH root login safely"
+      tags: cis_5.2.8
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin prohibit-password'
+        state: present
+      notify: restart ssh
+
+    - name: "Ensure PAM allows root login"
+      tags: pam_fix
+      lineinfile:
+        path: /etc/pam.d/sshd
+        regexp: '^account.*required.*pam_access.so'
+        state: absent
+
+    - name: "Ensure SSH RSA algorithms are supported"
+      tags: ssh_algorithms
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        line: 'PubkeyAcceptedAlgorithms +ssh-rsa'
+        state: present
+      notify: restart ssh
+
+    - name: "Backup critical files before changes"
+      tags: backup
+      copy:
+        src: "{{ item }}"
+        dest: "{{ item }}.backup_{{ ansible_date_time.epoch }}"
+        remote_src: yes
+      with_items:
+        - /etc/ssh/sshd_config
+        - /etc/pam.d/sshd
+
+    - name: "CIS 5.2.9 - Ensure SSH PermitEmptyPasswords is disabled"
+      tags: cis_5.2.9
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitEmptyPasswords'
+        line: 'PermitEmptyPasswords no'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.10 - Ensure SSH PermitUserEnvironment is disabled"
+      tags: cis_5.2.10
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitUserEnvironment'
+        line: 'PermitUserEnvironment no'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.11 - Ensure only approved MAC algorithms are used"
+      tags: cis_5.2.11
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^MACs'
+        line: 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.12 - Ensure SSH Idle Timeout Interval is configured"
+      tags: cis_5.2.12
+      block:
+        - name: Set ClientAliveInterval
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: '^ClientAliveInterval'
+            line: 'ClientAliveInterval 300'
+            state: present
+          notify: restart ssh
+
+        - name: Set ClientAliveCountMax
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: '^ClientAliveCountMax'
+            line: 'ClientAliveCountMax 0'
+            state: present
+          notify: restart ssh
+
+    - name: "CIS 5.2.13 - Ensure SSH LoginGraceTime is set to one minute or less"
+      tags: cis_5.2.13
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^LoginGraceTime'
+        line: 'LoginGraceTime 60'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.14 - Ensure SSH warning banner is configured"
+      tags: cis_5.2.14
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^Banner'
+        line: 'Banner /etc/issue.net'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.15 - Ensure SSH PAM is enabled"
+      tags: cis_5.2.15
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^UsePAM'
+        line: 'UsePAM yes'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.16 - Ensure SSH AllowTcpForwarding is disabled"
+      tags: cis_5.2.16
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^AllowTcpForwarding'
+        line: 'AllowTcpForwarding no'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.17 - Ensure SSH MaxStartups is configured"
+      tags: cis_5.2.17
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^MaxStartups'
+        line: 'MaxStartups 10:30:60'
+        state: present
+      notify: restart ssh
+
+    - name: "CIS 5.2.18 - Ensure SSH MaxSessions is limited"
+      tags: cis_5.2.18
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^MaxSessions'
+        line: 'MaxSessions 10'
+        state: present
+      notify: restart ssh
+
+  # =========================
+  # CIS 5.3 - Configure PAM
+  # =========================
+    - name: "CIS 5.3.1 - Ensure password creation requirements are configured"
+      tags: cis_5.3.1
+      block:
+        - name: Install pam_pwquality
+          package:
+            name: libpwquality
+            state: present
+
+        - name: Configure password quality
+          lineinfile:
+            path: /etc/security/pwquality.conf
+            regexp: '^{{ item.key }}'
+            line: '{{ item.key }} = {{ item.value }}'
+            state: present
+          loop:
+            - { key: 'minlen', value: '14' }
+            - { key: 'minclass', value: '4' }
+            - { key: 'dcredit', value: '-1' }
+            - { key: 'ucredit', value: '-1' }
+            - { key: 'ocredit', value: '-1' }
+            - { key: 'lcredit', value: '-1' }
+
+    - name: "CIS 5.3.2 - Ensure lockout for failed password attempts is configured"
+      tags: cis_5.3.2
+      block:
+        - name: Configure auth lockout
+          lineinfile:
+            path: /etc/pam.d/system-auth
+            regexp: '^auth required pam_faillock.so'
+            line: 'auth required pam_faillock.so preauth silent audit deny=5 unlock_time=900'
+            state: present
+
+        - name: Configure account lockout
+          lineinfile:
+            path: /etc/pam.d/system-auth
+            regexp: '^account required pam_faillock.so'
+            line: 'account required pam_faillock.so'
+            state: present
+
+    - name: "CIS 5.3.3 - Ensure password reuse is limited"
+      tags: cis_5.3.3
+      lineinfile:
+        path: /etc/pam.d/system-auth
+        regexp: '^password sufficient pam_unix.so'
+        line: 'password sufficient pam_unix.so remember=5'
+        state: present
+
+    - name: "CIS 5.3.4 - Ensure password hashing algorithm is SHA-512"
+      tags: cis_5.3.4
+      lineinfile:
+        path: /etc/pam.d/system-auth
+        regexp: '^password sufficient pam_unix.so'
+        line: 'password sufficient pam_unix.so sha512'
+        state: present
+
+  # =========================
+  # CIS 5.4 - User Accounts and Environment
+  # =========================
+    - name: "CIS 5.4.1 - Ensure password expiration is 365 days or less"
+      tags: cis_5.4.1
+      lineinfile:
+        path: /etc/login.defs
+        regexp: '^PASS_MAX_DAYS'
+        line: 'PASS_MAX_DAYS 365'
+        state: present
+
+    - name: "CIS 5.4.2 - Ensure minimum days between password changes is 7 or more"
+      tags: cis_5.4.2
+      lineinfile:
+        path: /etc/login.defs
+        regexp: '^PASS_MIN_DAYS'
+        line: 'PASS_MIN_DAYS 7'
+        state: present
+
+    - name: "CIS 5.4.3 - Ensure password expiration warning days is 7 or more"
+      tags: cis_5.4.3
+      lineinfile:
+        path: /etc/login.defs
+        regexp: '^PASS_WARN_AGE'
+        line: 'PASS_WARN_AGE 7'
+        state: present
+
+    - name: "CIS 5.4.4 - Ensure inactive password lock is 30 days or less"
+      tags: cis_5.4.4
+      command: useradd -D -f 300
+      ignore_errors: yes
+
+#    - name: "CIS 5.4.5 - Ensure all users last password change date is in the past"
+#      tags: cis_5.4.5
+#      command: chage --mindays 1 root
+#      ignore_errors: yes
+
+  # =========================
+  # CIS 5.5 - User Accounts and Environment
+  # =========================
+    - name: "CIS 5.5.1.1 - Ensure password expiration is 365 days or less for existing users"
+      tags: cis_5.5.1.1
+      command: chage --maxdays 365 root
+      ignore_errors: yes
+
+    - name: "CIS 5.5.1.2 - Ensure minimum days between password changes is 7 or more for existing users"
+      tags: cis_5.5.1.2
+      command: chage --mindays 7 root
+      ignore_errors: yes
+
+    - name: "CIS 5.5.1.3 - Ensure password expiration warning days is 7 or more for existing users"
+      tags: cis_5.5.1.3
+      command: chage --warndays 7 root
+      ignore_errors: yes
+
+    - name: "CIS 5.5.1.4 - Ensure inactive password lock is 30 days or less for existing users"
+      tags: cis_5.5.1.4
+      command: chage --inactive 30 root
+      ignore_errors: yes
+
+    - name: "CIS 5.5.2 - Ensure system accounts are secured"
+      tags: cis_5.5.2
+      shell: |
+        for user in `awk -F: '($3 < 1000) {print $1 }' /etc/passwd`; do
+          if [ $user != "root" ]; then
+            /usr/sbin/usermod -L $user
+            if [ $user != "sync" ] && [ $user != "shutdown" ] && [ $user != "halt" ]; then
+              /usr/sbin/usermod -s /sbin/nologin $user
+            fi
+          fi
+        done
+      args:
+        warn: false
+      ignore_errors: yes
+
+    - name: "CIS 5.5.3 - Ensure default group for the root account is GID 0"
+      tags: cis_5.5.3
+      user:
+        name: root
+        group: 0
+
+    - name: "CIS 5.5.4 - Ensure default user umask is 027 or more restrictive"
+      tags: cis_5.5.4
+      block:
+        - name: Set umask in bashrc
+          lineinfile:
+            path: /etc/bashrc
+            regexp: '^umask'
+            line: 'umask 027'
+            state: present
+
+        - name: Set umask in profile
+          lineinfile:
+            path: /etc/profile
+            regexp: '^umask'
+            line: 'umask 027'
+            state: present
+
+        - name: Set umask in login.defs
+          lineinfile:
+            path: /etc/login.defs
+            regexp: '^UMASK'
+            line: 'UMASK 027'
+            state: present
+
+  # =========================
+  # CIS 5.6 - User Accounts and Environment
+  # =========================
+    - name: "CIS 5.6 - Ensure root login is restricted to system console"
+      tags: cis_5.6
+      lineinfile:
+        path: /etc/securetty
+        regexp: '^console$'
+        line: 'console'
+        state: present
+      ignore_errors: yes
+
+  # =========================
+  # CIS 6.1 - System File Permissions
+  # =========================
+    - name: "CIS 6.1.1 - Audit system file permissions"
+      tags: cis_6.1.1
+      command: rpm -Va --nomtime --nosize --nomd5 --nolinkto
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 6.1.2 - Ensure permissions on /etc/passwd are configured"
+      tags: cis_6.1.2
+      file:
+        path: /etc/passwd
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 6.1.3 - Ensure permissions on /etc/passwd- are configured"
+      tags: cis_6.1.3
+      file:
+        path: /etc/passwd-
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 6.1.4 - Ensure permissions on /etc/group are configured"
+      tags: cis_6.1.4
+      file:
+        path: /etc/group
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 6.1.5 - Ensure permissions on /etc/group- are configured"
+      tags: cis_6.1.5
+      file:
+        path: /etc/group-
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "CIS 6.1.6 - Ensure permissions on /etc/shadow are configured"
+      tags: cis_6.1.6
+      file:
+        path: /etc/shadow
+        owner: root
+        group: root
+        mode: '0000'
+
+    - name: "CIS 6.1.7 - Ensure permissions on /etc/shadow- are configured"
+      tags: cis_6.1.7
+      file:
+        path: /etc/shadow-
+        owner: root
+        group: root
+        mode: '0000'
+
+    - name: "CIS 6.1.8 - Ensure permissions on /etc/gshadow are configured"
+      tags: cis_6.1.8
+      file:
+        path: /etc/gshadow
+        owner: root
+        group: root
+        mode: '0000'
+
+    - name: "CIS 6.1.9 - Ensure permissions on /etc/gshadow- are configured"
+      tags: cis_6.1.9
+      file:
+        path: /etc/gshadow-
+        owner: root
+        group: root
+        mode: '0000'
+
+    - name: "CIS 6.1.10 - Ensure no world writable files exist"
+      tags: cis_6.1.10
+      command: find / -xdev -type f -perm -0002
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 6.1.11 - Ensure no unowned files or directories exist"
+      tags: cis_6.1.11
+      command: find / -xdev -nouser
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 6.1.12 - Ensure no ungrouped files or directories exist"
+      tags: cis_6.1.12
+      command: find / -xdev -nogroup
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 6.1.13 - Audit SUID executables"
+      tags: cis_6.1.13
+      command: find / -xdev -type f -perm -4000
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "CIS 6.1.14 - Audit SGID executables"
+      tags: cis_6.1.14
+      command: find / -xdev -type f -perm -2000
+      changed_when: false
+      ignore_errors: yes
+
+    # =========================
+    # Filesystem Mount Options Hardening - FIXED VERSION
+    # =========================
+    - name: Harden filesystem mount options
+      tags: fstab_hardening
+      block:
+        - name: Backup fstab file
+          copy:
+            src: /etc/fstab
+            dest: "/etc/fstab.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
+            remote_src: yes
+          ignore_errors: yes
+    
+        - name: Check current fstab entries
+          command: cat /etc/fstab
+          register: fstab_current
+          changed_when: false
+          ignore_errors: yes
+    
+        - name: Display current fstab
+          debug:
+            var: fstab_current.stdout
+    
+        # استفاده از regex عمومی‌تر برای تمام device types
+        - name: Harden /home partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/home\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,nodev,nosuid\2'
+            backup: yes
+          when: "'/home' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /tmp partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/tmp\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/tmp' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,nodev,nosuid\2'
+            backup: yes
+          when: "'/var' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/log/audit partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/log/audit\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/log/audit' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/log partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/log\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/log' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Harden /var/tmp partition
+          replace:
+            path: /etc/fstab
+            regexp: '^(\S+\s+/var/tmp\s+\S+\s+)defaults(\s+[0-9]\s+[0-9])$'
+            replace: '\1rw,noexec,nodev,nosuid\2'
+            backup: yes
+          when: "'/var/tmp' in fstab_current.stdout"
+          ignore_errors: yes
+    
+        - name: Verify fstab changes were applied
+          command: grep -E '^\S+\s+/(home|tmp|var|var/log/audit|var/log|var/tmp)\s+' /etc/fstab
+          register: fstab_verify
+          changed_when: false
+          ignore_errors: yes
+    
+        - name: Display fstab after changes
+          debug:
+            var: fstab_verify.stdout
+    
+        - name: Remount partitions with new options
+          mount:
+            path: "{{ item }}"
+            src: "{{ item | mount_info | default(omit) }}"
+            fstype: "{{ item | mount_info('fstype') | default(omit) }}"
+            opts: "{{ item | mount_info('opts') | default(omit) }}"
+            state: remounted
+          loop:
+            - /home
+            - /tmp
+            - /var
+            - /var/log
+            - /var/log/audit
+            - /var/tmp
+          ignore_errors: yes
+    
+        - name: Display current mount options after remount
+          shell: |
+            for mp in /home /tmp /var /var/log/audit /var/log /var/tmp; do
+              if mountpoint -q "$mp"; then
+                echo "$mp: $(findmnt -n -o OPTIONS "$mp")"
+              fi
+            done
+          args:
+            warn: false
+          register: mount_final
+          ignore_errors: yes
+    
+        - name: Display final mount options
+          debug:
+            var: mount_final.stdout
