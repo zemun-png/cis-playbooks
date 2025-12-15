@@ -60,28 +60,18 @@
           when: loaded_modules.stdout != ""
           ignore_errors: yes
 
-        - name: Check if modprobe configs were modified recently
-          shell: |
-            find /etc/modprobe.d -name "*.conf" -mtime -1 | head -1
-          register: modprobe_modified
-          changed_when: false
-          ignore_errors: yes
-
-        - name: Rebuild initramfs (Rocky Linux)
-          shell: dracut -f
-          when: modprobe_modified.stdout != ""
-          ignore_errors: yes
-
   # =========================
   # Kernel Sysctl Settings
   # =========================
-    - name: Check if sysctl file exists
-      stat:
-        path: /etc/sysctl.d/99-security-hardening.conf
-      register: sysctl_file
+    - name: Check current sysctl configuration
+      shell: |
+        sysctl -n kernel.randomize_va_space 2>/dev/null || echo "not_set"
+        sysctl -n kernel.yama.ptrace_scope 2>/dev/null || echo "not_set"
+      register: current_sysctl
       changed_when: false
+      tags: sysctl_hardening
 
-    - name: Apply kernel sysctl settings
+    - name: Apply kernel sysctl settings only if needed
       tags: sysctl_hardening
       copy:
         dest: /etc/sysctl.d/99-security-hardening.conf
@@ -119,8 +109,16 @@
         owner: root
         group: root
         mode: '0644'
-      when: not sysctl_file.stat.exists
-      notify: Reload sysctl
+      register: sysctl_file
+      when: 
+        - current_sysctl.stdout_lines[0] != "2" or 
+          current_sysctl.stdout_lines[1] != "1"
+
+    - name: Apply sysctl settings if file created
+      command: sysctl -p /etc/sysctl.d/99-security-hardening.conf
+      when: sysctl_file.changed
+      ignore_errors: yes
+      tags: sysctl_hardening
 
   # =========================
   # Systemd & Coredump
@@ -148,50 +146,43 @@
             group: root
             mode: '0644'
           when: "'Storage=none' not in coredump_current.stdout"
+          register: coredump_file
 
         - name: Check coredump socket status
-          command: systemctl is-active systemd-coredump.socket
+          shell: systemctl is-enabled systemd-coredump.socket 2>/dev/null || echo "not-found"
           register: coredump_socket_status
           changed_when: false
-          ignore_errors: yes
 
-        - name: Disable coredump socket
+        - name: Disable coredump socket if enabled
           systemd:
             name: systemd-coredump.socket
             enabled: no
             state: stopped
-          when: coredump_socket_status.stdout == 'active'
+          when: coredump_socket_status.stdout == "enabled"
+          register: coredump_socket
 
-        - name: Reload systemd configuration
+        - name: Reload systemd configuration if changes made
           command: systemctl daemon-reexec
-          when: coredump_socket_status is changed or coredump_current is changed
+          when: coredump_file.changed or coredump_socket.changed
           ignore_errors: yes
 
   # =========================
   # Cron Security
   # =========================
-    - name: Check if cron files exist
-      stat:
-        path: "{{ item }}"
-      loop:
-        - /etc/cron.allow
-        - /etc/at.allow
-      register: cron_files
-      changed_when: false
-
     - name: Create missing cron files if they don't exist
       file:
-        path: "{{ item.item }}"
+        path: "{{ item }}"
         state: touch
         owner: root
         group: root
         mode: '0600'
-      loop: "{{ cron_files.results }}"
-      when: not item.stat.exists
+      loop:
+        - /etc/cron.allow
+        - /etc/at.allow
       ignore_errors: yes
-
-    - name: Secure cron files
       tags: cron_hardening
+
+    - name: Secure cron files with correct permissions
       file:
         path: "{{ item.path }}"
         owner: root
@@ -208,15 +199,7 @@
         - { path: '/etc/crontab',      mode: '0600' }
         - { path: '/etc/at.allow',     mode: '0600' }
       ignore_errors: yes
-
-    - name: Verify cron.d permissions
-      command: stat -c "%n %a %U %G" /etc/cron.d
-      register: cron_d_status
-      ignore_errors: yes
-
-    - name: Display cron.d status
-      debug:
-        msg: "Current /etc/cron.d permissions → {{ cron_d_status.stdout }}"
+      tags: cron_hardening
 
   # =========================
   # SSH Hardening
@@ -224,15 +207,6 @@
     - name: Harden SSH
       tags: ssh_hardening
       block:
-        - name: Check current banners
-          stat:
-            path: "{{ item }}"
-          loop:
-            - /etc/issue
-            - /etc/issue.net
-          register: banner_files
-          changed_when: false
-
         - name: Configure banners
           block:
             - name: Configure local banner
@@ -240,7 +214,7 @@
                 dest: /etc/issue
                 content: |
                   ################################################################
-                  # Welcome to PNA.co
+                  # Welcome to SEP.co
                   # All Connections are monitored and recorded
                   # Disconnect IMMEDIATELY if you are not an authorized user!
                   ################################################################
@@ -253,20 +227,13 @@
                 dest: /etc/issue.net
                 content: |
                   ################################################################
-                  # Welcome to PNA.co
+                  # Welcome to SEP.co
                   # All Connections are monitored and recorded
                   # Disconnect IMMEDIATELY if you are not an authorized user!
                   ################################################################
                 owner: root
                 group: root
                 mode: '0644'
-
-        - name: Backup sshd_config
-          copy:
-            src: /etc/ssh/sshd_config
-            dest: "/etc/ssh/sshd_config.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
-            remote_src: yes
-          ignore_errors: yes
 
         - name: Check current SSH hardening settings
           shell: |
@@ -296,6 +263,7 @@
               Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr
               MACs hmac-sha2-512,hmac-sha2-256
               KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+            marker: "# {mark} ANSIBLE MANAGED BLOCK - SSH HARDENING"
             backup: yes
           when: "'GSSAPIAuthentication no' not in ssh_current.stdout"
           notify: Restart SSH
@@ -306,24 +274,12 @@
           changed_when: false
           ignore_errors: yes
 
-        - name: Ensure SSH port 2200 SELinux context
-          command: semanage port -a -t ssh_port_t -p tcp 22500
-          when: semanage_check.rc == 0
-          ignore_errors: yes
-
   # =========================
   # Password Policy
   # =========================
     - name: Configure password policy
       tags: password_policy
       block:
-        - name: "Backup /etc/login.defs"
-          copy:
-             src: /etc/login.defs
-             dest: "/etc/login.defs.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
-             remote_src: yes
-          ignore_errors: yes
-
         - name: Check current password policy
           command: grep -E "^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD|INACTIVE)" /etc/login.defs
           register: login_defs_current
@@ -344,9 +300,9 @@
             - { regexp: '^INACTIVE', line: 'INACTIVE 45' }
           when: "item.line not in login_defs_current.stdout"
 
-    # =========================
-    # Sudoers Hardening - FIXED VERSION
-    # =========================
+  # =========================
+  # Sudoers Hardening - OPTIMIZED VERSION
+  # =========================
     - name: Harden sudoers
       tags: sudo_hardening
       block:
@@ -356,28 +312,21 @@
             dest: "/etc/sudoers.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
             remote_src: yes
           ignore_errors: yes
-    
-        - name: Check current sudoers content
-          shell: |
-            cat /etc/sudoers
-          args:
-            warn: false
-          register: sudoers_full_content
-          changed_when: false
-          ignore_errors: yes
-    
-        - name: Debug sudoers full content
-          debug:
-            var: sudoers_full_content.stdout
-    
-        # حذف خطوط تکراری LINUXADMINS
-        - name: Remove duplicate LINUXADMINS entries
-          replace:
+
+        - name: Apply CIS-approved sudoers defaults
+          lineinfile:
             path: /etc/sudoers
-            regexp: '^%LINUXADMINS ALL=\(ALL\) ALL\n'
-            replace: ''
-          ignore_errors: yes
-    
+            regexp: '^{{ item.regexp }}'
+            line: '{{ item.line }}'
+            state: present
+            backup: yes
+            validate: '/usr/sbin/visudo -cf %s'
+          loop:
+            - { regexp: 'Defaults\\s+use_pty', line: 'Defaults use_pty' }
+            - { regexp: 'Defaults\\s+timestamp_timeout', line: 'Defaults timestamp_timeout=0' }
+            - { regexp: 'Defaults\\s+log_output', line: 'Defaults log_output' }
+            - { regexp: 'Defaults\\s+logfile=', line: 'Defaults logfile="/var/log/sudo.log"' }
+
         - name: Ensure single LINUXADMINS entry
           lineinfile:
             path: /etc/sudoers
@@ -386,61 +335,19 @@
             insertafter: '^## Read drop-in files from /etc/sudoers.d'
             validate: '/usr/sbin/visudo -cf %s'
           ignore_errors: yes
-    
-        # استفاده از replace برای تنظیمات Defaults
-        - name: Configure sudoers defaults with replace
-          block:
-            - name: Remove duplicate use_pty
-              replace:
-                path: /etc/sudoers
-                regexp: '^Defaults use_pty\n'
-                replace: ''
-                validate: '/usr/sbin/visudo -cf %s'
-    
-            - name: Set use_pty
-              lineinfile:
-                path: /etc/sudoers
-                line: 'Defaults use_pty'
-                state: present
-                insertafter: '^Defaults    secure_path = /sbin:/bin:/usr/sbin:/usr/bin'
-                validate: '/usr/sbin/visudo -cf %s'
-    
-            - name: Set timestamp_timeout
-              lineinfile:
-                path: /etc/sudoers
-                line: 'Defaults timestamp_timeout=0'
-                state: present
-                insertafter: '^Defaults use_pty'
-                validate: '/usr/sbin/visudo -cf %s'
-    
-            - name: Set log_output
-              lineinfile:
-                path: /etc/sudoers
-                line: 'Defaults log_output'
-                state: present
-                insertafter: '^Defaults timestamp_timeout=0'
-                validate: '/usr/sbin/visudo -cf %s'
-    
-            - name: Set logfile
-              lineinfile:
-                path: /etc/sudoers
-                line: 'Defaults logfile="/var/log/sudo.log"'
-                state: present
-                insertafter: '^Defaults log_output'
-                validate: '/usr/sbin/visudo -cf %s'
-          ignore_errors: yes
-    
-        - name: Display final sudoers content
+
+        - name: Display final sudoers settings
           shell: |
             grep -E "^(%LINUXADMINS|Defaults (use_pty|timestamp_timeout|log_output|logfile))" /etc/sudoers
           args:
             warn: false
           register: sudoers_final
           ignore_errors: yes
-    
+
         - name: Debug final sudoers settings
           debug:
             var: sudoers_final.stdout
+
   # =========================
   # Filesystem Hardening
   # =========================
@@ -473,6 +380,112 @@
         warn: false
       when: world_writable_count.stdout != "0"
       ignore_errors: yes
+
+# =========================
+# Journald Hardening (Detailed)
+# =========================
+    - name: Harden systemd-journald
+      tags: log_hardening
+      block:
+        # Task for 6.2.1.2 - journald log file access
+        - name: Backup original journald tmpfiles config
+          copy:
+            src: /usr/lib/tmpfiles.d/systemd.conf
+            dest: /usr/lib/tmpfiles.d/systemd.conf.bak
+            remote_src: yes
+          ignore_errors: yes
+          when: '"systemd.conf" in lookup("fileglob", "/usr/lib/tmpfiles.d/*")'
+
+        - name: Ensure correct permissions in systemd tmpfiles config
+          blockinfile:
+            path: /usr/lib/tmpfiles.d/systemd.conf
+            block: |
+              # Set proper permissions for journal directory
+              d /var/log/journal 2755 root systemd-journal - -
+              z /var/log/journal 2755 root systemd-journal - -
+            marker: "# {mark} ANSIBLE MANAGED BLOCK - JOURNAL PERMISSIONS"
+            backup: yes
+          register: journald_tmpfile_fix
+
+        - name: Apply tmpfiles configuration
+          command: systemd-tmpfiles --create
+          when: journald_tmpfile_fix.changed
+          ignore_errors: yes
+
+        # Task for 6.2.1.3 - journald log rotation
+        - name: Backup original journald.conf
+          copy:
+            src: /etc/systemd/journald.conf
+            dest: /etc/systemd/journald.conf.bak
+            remote_src: yes
+          ignore_errors: yes
+
+        - name: Configure journald log rotation limits
+          lineinfile:
+            path: /etc/systemd/journald.conf
+            regexp: '^{{ item.regexp }}'
+            line: '{{ item.line }}'
+            backup: yes
+          loop:
+            - { regexp: '^#?SystemMaxUse=', line: 'SystemMaxUse=500M' }
+            - { regexp: '^#?SystemKeepFree=', line: 'SystemKeepFree=100M' }
+            - { regexp: '^#?RuntimeMaxUse=', line: 'RuntimeMaxUse=100M' }
+            - { regexp: '^#?RuntimeKeepFree=', line: 'RuntimeKeepFree=50M' }
+            - { regexp: '^#?MaxFileSec=', line: 'MaxFileSec=1week' }
+          register: journald_rotation_fix
+
+        - name: Enable persistent storage for journal
+          lineinfile:
+            path: /etc/systemd/journald.conf
+            regexp: '^#?Storage='
+            line: 'Storage=persistent'
+            backup: yes
+
+        - name: Enable journal compression
+          lineinfile:
+            path: /etc/systemd/journald.conf
+            regexp: '^#?Compress='
+            line: 'Compress=yes'
+            backup: yes
+
+        - name: Set maximum retention period
+          lineinfile:
+            path: /etc/systemd/journald.conf
+            regexp: '^#?MaxRetentionSec='
+            line: 'MaxRetentionSec=1month'
+            backup: yes
+
+        - name: Restart systemd-journald service
+          systemd:
+            name: systemd-journald
+            state: restarted
+            daemon_reload: yes
+          when: journald_tmpfile_fix.changed or journald_rotation_fix.changed
+
+        - name: Verify journal configuration
+          shell: |
+            echo "=== Journal Configuration ==="
+            sudo journalctl --verify
+            
+            echo -e "\n=== Journal Disk Usage ==="
+            sudo journalctl --disk-usage
+            
+            echo -e "\n=== Journal Settings ==="
+            sudo systemctl show systemd-journald | grep -E "(LogLevel|LogTarget|Storage|SystemMaxUse|RuntimeMaxUse)"
+            
+            echo -e "\n=== Journal Directory ==="
+            ls -la /var/log/journal/ 2>/dev/null || echo "No persistent journal directory"
+          register: journal_verification
+          changed_when: false
+          
+        - name: Display journal hardening results
+          debug:
+            msg: |
+              Journald Hardening Applied:
+              - Tmpfiles config modified: {{ journald_tmpfile_fix.changed | default(false) }}
+              - Rotation settings modified: {{ journald_rotation_fix.changed | default(false) }}
+              - Verification output:
+              {{ journal_verification.stdout }}
 
   # =========================
   # Auditd & AIDE
@@ -564,15 +577,63 @@
               -a always,exit -F arch=b32 -S mount -F auid>=1000 -F auid!=4294967295 -k mounts
               -e 2
           when: not audit_rules.stat.exists
+          notify: Restart auditd
+  # =========================
+  # Firewall DROP Zone Configuration
+  # =========================
+    - name: Configure firewalld with DROP target
+      tags: firewall_hardening
+      block:
+        - name: Check current firewall zone target
+          shell: |
+            # Check if public zone exists and get its target
+            if firewall-cmd --get-zones | grep -q public; then
+              firewall-cmd --permanent --zone=public --get-target
+            else
+              echo "not_found"
+            fi
+          register: current_zone_target
+          changed_when: false
+          ignore_errors: yes
 
-    - name: Reload auditd
-      command: service auditd restart
-      when: audit_rules is changed
-      ignore_errors: yes
+        - name: Display current target
+          debug:
+            msg: "Current firewall zone target: {{ current_zone_target.stdout }}"
 
-    # =========================
-    # Firewall Configuration
-    # =========================
+        - name: Set DROP target for public zone if not already set
+          shell: |
+            # Set target to DROP
+            firewall-cmd --permanent --zone=public --set-target=DROP
+            
+            # Reload to apply changes
+            firewall-cmd --reload
+            
+            # Verify the change
+            firewall-cmd --permanent --zone=public --get-target
+          when: current_zone_target.stdout != "DROP"
+          args:
+            warn: false
+          register: set_drop_result
+          ignore_errors: yes
+
+        - name: Verify DROP target is applied
+          shell: |
+            echo "Running config: $(firewall-cmd --zone=public --get-target)"
+            echo "Permanent config: $(firewall-cmd --permanent --zone=public --get-target)"
+          register: verify_drop
+          changed_when: false
+          
+        - name: Display final firewall configuration
+          debug:
+            msg: |
+              Firewall DROP configuration status:
+              - Running target: {{ verify_drop.stdout_lines[0] }}
+              - Permanent target: {{ verify_drop.stdout_lines[1] }}
+              - Changes made: {{ set_drop_result.changed | default(false) }}
+
+  # =========================
+  # Firewall Configuration
+  # =========================
     - name: Configure firewalld with DROP policy
       tags: firewall_hardening
       block:
@@ -582,28 +643,29 @@
           changed_when: false
           ignore_errors: yes
 
-        - name: Ensure firewalld zone file has DROP target
-          copy:
-            dest: /etc/firewalld/zones/public.xml
-            content: |
-              <?xml version="1.0" encoding="utf-8"?>
-              <zone target="DROP">
-                <short>Public</short>
-                <description>For use in public areas. You do not trust the other computers on networks to not harm your computer. Only selected incoming connections are accepted.</description>
-                <service name="ssh"/>
-                <interface name="team0"/>
-                <port protocol="tcp" port="1545"/>
-                <port protocol="udp" port="161"/>
-                <port protocol="tcp" port="2200"/>
-                <port protocol="tcp" port="10050"/>
-                <port protocol="tcp" port="10051"/>
-              </zone>
-            owner: root
-            group: root
-            mode: '0640'
-          when: "'target: DROP' not in firewall_current.stdout"
-          notify: Reload firewall
-    
+        - name: Configure loopback interface properly (IPv4 and IPv6)
+          shell: |
+            # Allow legitimate loopback traffic in trusted zone (IPv4)
+            firewall-cmd --permanent --zone=trusted --add-source=127.0.0.1/8 2>/dev/null || true
+            
+            # Allow legitimate loopback traffic in trusted zone (IPv6)
+            firewall-cmd --permanent --zone=trusted --add-source=::1 2>/dev/null || true
+            
+            # Add loopback interface to trusted zone
+            firewall-cmd --permanent --zone=trusted --add-interface=lo 2>/dev/null || true
+            
+            # Drop spoofed loopback packets in public zone (IPv4)
+            firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv4 source address=127.0.0.0/8 drop' 2>/dev/null || true
+            
+            # Drop spoofed loopback packets in public zone (IPv6)
+            firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv6 source address="::1" drop' 2>/dev/null || true
+            
+            firewall-cmd --reload
+          args:
+            warn: false
+          ignore_errors: yes
+          register: loopback_config
+
         - name: Unmask firewalld service
           systemd:
             name: firewalld
@@ -627,39 +689,21 @@
             warn: false
           when: "'icmp-block-inversion: no' in firewall_current.stdout"
           ignore_errors: yes
-    
-        - name: Configure loopback interface (allow in/out)
+
+        - name: Verify loopback rules
           shell: |
-            # Allow loopback traffic in trusted zone
-            firewall-cmd --permanent --zone=trusted --add-interface=lo
-            firewall-cmd --permanent --zone=trusted --add-source=127.0.0.1/8
-            
-            # Drop spoofed loopback packets in public zone
-            firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv4 source address=127.0.0.0/8 drop'
-            
-            firewall-cmd --reload
-          args:
-            warn: false
-          when: "'127.0.0.1/8' not in firewall_current.stdout"
-          ignore_errors: yes
-    
-        - name: Allow subnet 10.0.129.0/24 in public zone
-          firewalld:
-            zone: public
-            source: '10.0.129.0/24'
-            permanent: yes
-            state: enabled
-          when: "'10.0.129.0/24' not in firewall_current.stdout"
-          notify: Reload firewall
-    
-        - name: Verify firewall configuration
-          command: firewall-cmd --list-all
-          register: firewall_status
-          ignore_errors: yes
-          
-        - name: Display firewall status
+            echo "=== IPv4 Loopback Rules ==="
+            firewall-cmd --zone=public --list-rich-rules 2>/dev/null | grep '127.0.0.0/8' || echo "Not found"
+            echo "=== IPv6 Loopback Rules ==="
+            firewall-cmd --zone=public --list-rich-rules 2>/dev/null | grep '::1' || echo "Not found"
+            echo "=== Trusted Zone ==="
+            firewall-cmd --zone=trusted --list-all 2>/dev/null || echo "Trusted zone not configured"
+          register: loopback_verify
+          changed_when: false
+
+        - name: Display loopback configuration status
           debug:
-            var: firewall_status.stdout
+            msg: "{{ loopback_verify.stdout }}"
 
   # =========================
   # User Hardening
@@ -743,10 +787,10 @@
               echo "**********************************************************************"
             marker: "# {mark} ANSIBLE MANAGED BLOCK - SYSTEM INFO"
           when: "'umask 0027' not in profile_current.stdout"
-    
-    # =========================
-    # GRUB Bootloader Hardening
-    # =========================
+
+  # =========================
+  # GRUB Bootloader Hardening
+  # =========================
     - name: Configure GRUB audit_backlog_limit
       tags: grub_hardening
       block:
@@ -775,6 +819,19 @@
           when: "'audit_backlog_limit=8192' not in grub_cmdline_current.stdout"
           ignore_errors: yes
 
+        - name: Ensure audit=1 is set in kernel boot parameters
+          shell: grubby --info=ALL 2>/dev/null | grep -q '\baudit=1\b' && echo "present" || echo "missing"
+          register: audit_grub_check
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Add audit=1 if not present
+          command: |
+            grubby --update-kernel=ALL --args="audit=1"
+          when: audit_grub_check.stdout == "missing"
+          register: add_audit_param
+          ignore_errors: yes
+
         - name: Rebuild GRUB configuration
           shell: |
             if command -v grub2-mkconfig >/dev/null 2>&1; then
@@ -787,30 +844,19 @@
             fi
           args:
             warn: false
-          when: "'audit_backlog_limit=8192' not in grub_cmdline_current.stdout"
+          when: "'audit_backlog_limit=8192' not in grub_cmdline_current.stdout or audit_grub_check.stdout == 'missing'"
           ignore_errors: yes
 
-        - name: Verify GRUB configuration
-          shell: |
-            if [ -f /boot/grub2/grub.cfg ]; then
-              grep audit_backlog_limit /boot/grub2/grub.cfg || echo "audit_backlog_limit not found in GRUB2 config"
-            elif [ -f /boot/grub/grub.cfg ]; then
-              grep audit_backlog_limit /boot/grub/grub.cfg || echo "audit_backlog_limit not found in GRUB config"
-            else
-              echo "GRUB config files not found"
-            fi
-          args:
-            warn: false
-          register: grub_verify
-          ignore_errors: yes
-
-        - name: Display GRUB verification result
+        - name: Display GRUB configuration status
           debug:
-            msg: "GRUB verification: {{ grub_verify.stdout }}"
+            msg: |
+              Audit backlog parameter: {{ grub_cmdline_current.stdout }}
+              Audit boot parameter: {{ audit_grub_check.stdout }}
+          ignore_errors: yes
 
-    # =========================
-    # Filesystem Mount Options Hardening - FIXED VERSION
-    # =========================
+  # =========================
+  # Filesystem Mount Options Hardening
+  # =========================
     - name: Harden filesystem mount options
       tags: fstab_hardening
       block:
@@ -820,17 +866,13 @@
             dest: "/etc/fstab.bak_{{ lookup('pipe','date +%F_%H%M%S') }}"
             remote_src: yes
           ignore_errors: yes
-    
+
         - name: Check current fstab entries
           command: cat /etc/fstab
           register: fstab_current
           changed_when: false
           ignore_errors: yes
-    
-        - name: Display current fstab
-          debug:
-            var: fstab_current.stdout
-    
+
         # استفاده از regex عمومی‌تر برای تمام device types
         - name: Harden /home partition
           replace:
@@ -840,7 +882,7 @@
             backup: yes
           when: "'/home' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Harden /tmp partition
           replace:
             path: /etc/fstab
@@ -849,7 +891,7 @@
             backup: yes
           when: "'/tmp' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Harden /var partition
           replace:
             path: /etc/fstab
@@ -858,7 +900,7 @@
             backup: yes
           when: "'/var' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Harden /var/log/audit partition
           replace:
             path: /etc/fstab
@@ -867,7 +909,7 @@
             backup: yes
           when: "'/var/log/audit' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Harden /var/log partition
           replace:
             path: /etc/fstab
@@ -876,7 +918,7 @@
             backup: yes
           when: "'/var/log' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Harden /var/tmp partition
           replace:
             path: /etc/fstab
@@ -885,17 +927,17 @@
             backup: yes
           when: "'/var/tmp' in fstab_current.stdout"
           ignore_errors: yes
-    
+
         - name: Verify fstab changes were applied
           command: grep -E '^\S+\s+/(home|tmp|var|var/log/audit|var/log|var/tmp)\s+' /etc/fstab
           register: fstab_verify
           changed_when: false
           ignore_errors: yes
-    
+
         - name: Display fstab after changes
           debug:
             var: fstab_verify.stdout
-    
+
         - name: Remount partitions with new options
           mount:
             path: "{{ item }}"
@@ -911,31 +953,16 @@
             - /var/log/audit
             - /var/tmp
           ignore_errors: yes
-    
-        - name: Display current mount options after remount
-          shell: |
-            for mp in /home /tmp /var /var/log/audit /var/log /var/tmp; do
-              if mountpoint -q "$mp"; then
-                echo "$mp: $(findmnt -n -o OPTIONS "$mp")"
-              fi
-            done
-          args:
-            warn: false
-          register: mount_final
-          ignore_errors: yes
-    
-        - name: Display final mount options
-          debug:
-            var: mount_final.stdout
-    
-  handlers:
-    - name: Reload sysctl
-      command: sysctl -p /etc/sysctl.d/99-security-hardening.conf
-      ignore_errors: yes
 
+  handlers:
     - name: Restart SSH
       service:
         name: sshd
+        state: restarted
+
+    - name: Restart auditd
+      service:
+        name: auditd
         state: restarted
 
     - name: Reload firewall
